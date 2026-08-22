@@ -239,7 +239,11 @@ export function UnifiedAiAgent() {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isVoiceMuted, setIsVoiceMuted] = useState(false);
+  const isVoiceMutedRef = useRef(isVoiceMuted);
+  isVoiceMutedRef.current = isVoiceMuted;
+
   const [inputVal, setInputVal] = useState('');
+  const voiceEnabledRef = useRef(false);
   
   // Feedback HUD toast
   const [hudToast, setHudToast] = useState<{ title: string; subtitle: string } | null>(null);
@@ -264,6 +268,20 @@ export function UnifiedAiAgent() {
 
   // Automatic Entrance Greeting on Site Landing in Hinglish
   useEffect(() => {
+    const unlockVoice = () => {
+      voiceEnabledRef.current = true;
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance('');
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      }
+      document.removeEventListener('click', unlockVoice);
+      document.removeEventListener('touchstart', unlockVoice);
+    };
+    document.addEventListener('click', unlockVoice, { once: true });
+    document.addEventListener('touchstart', unlockVoice, { once: true });
+
     const hasSeenGreeting = sessionStorage.getItem('bvps_entrance_greeted');
     if (!hasSeenGreeting) {
       setShowEntranceGreeting(true);
@@ -271,22 +289,37 @@ export function UnifiedAiAgent() {
       const welcomeSpeech = 
         "Namaste! Bal Vikas Public School, Kalayat mein aapka swagat hai! Main aapka AI Assistant hoon. Aap bolkar ya likhkar jo bhi kahenge, main turant wahi page open kar dunga!";
 
-      // Fallback timer: auto-dismiss if audio autoplay is restricted
       const safetyTimer = setTimeout(() => {
         setShowEntranceGreeting(false);
         sessionStorage.setItem('bvps_entrance_greeted', 'true');
-      }, 6000);
+      }, 8000);
 
-      speakVoice(welcomeSpeech, () => {
+      const trySpeak = () => {
+        if (voiceEnabledRef.current) {
+          speakVoice(welcomeSpeech, () => {
+            clearTimeout(safetyTimer);
+            setTimeout(() => {
+              setShowEntranceGreeting(false);
+              sessionStorage.setItem('bvps_entrance_greeted', 'true');
+            }, 1500);
+          });
+        } else {
+          setTimeout(trySpeak, 500);
+        }
+      };
+      setTimeout(trySpeak, 600);
+
+      return () => {
         clearTimeout(safetyTimer);
-        setTimeout(() => {
-          setShowEntranceGreeting(false);
-          sessionStorage.setItem('bvps_entrance_greeted', 'true');
-        }, 1200);
-      });
-
-      return () => clearTimeout(safetyTimer);
+        document.removeEventListener('click', unlockVoice);
+        document.removeEventListener('touchstart', unlockVoice);
+      };
     }
+
+    return () => {
+      document.removeEventListener('click', unlockVoice);
+      document.removeEventListener('touchstart', unlockVoice);
+    };
   }, []);
 
   // Web Speech Recognition Engine
@@ -335,15 +368,17 @@ export function UnifiedAiAgent() {
 
   // Text-to-Speech Engine
   const speakVoice = (text: string, onFinish?: () => void) => {
-    if (isVoiceMuted || !('speechSynthesis' in window)) {
+    if (isVoiceMutedRef.current || !('speechSynthesis' in window)) {
       onFinish?.();
       return;
     }
 
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
+    voiceEnabledRef.current = true;
+    const cleanText = text.replace(/[🙏🎤🔊⚡✨🤖🎧💬✅🎯🎉🏆📊📸🖼️🏛️📚🏫🚌🖥️💧🏥]/g, '').replace(/\[.*?\]/g, '').trim();
+    const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = 'hi-IN';
-    utterance.rate = 1.0;
+    utterance.rate = 0.95;
     utterance.pitch = 1.05;
 
     const voices = window.speechSynthesis.getVoices();
@@ -352,12 +387,21 @@ export function UnifiedAiAgent() {
       utterance.voice = voiceMatch;
     }
 
+    const resumeInterval = setInterval(() => {
+      if (window.speechSynthesis && window.speechSynthesis.speaking) {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      }
+    }, 10000);
+
     utterance.onstart = () => setIsSpeaking(true);
     utterance.onend = () => {
+      clearInterval(resumeInterval);
       setIsSpeaking(false);
       onFinish?.();
     };
     utterance.onerror = () => {
+      clearInterval(resumeInterval);
       setIsSpeaking(false);
       onFinish?.();
     };
@@ -368,6 +412,31 @@ export function UnifiedAiAgent() {
   const stopVoice = () => {
     window.speechSynthesis?.cancel();
     setIsSpeaking(false);
+  };
+
+  // Slow smooth scroll like WhatsApp scale
+  const slowScrollPage = () => {
+    const totalHeight = document.documentElement.scrollHeight;
+    const viewHeight = window.innerHeight;
+    const maxScroll = totalHeight - viewHeight;
+    const startPos = window.scrollY;
+    const travel = maxScroll - startPos;
+    if (travel <= 0) return;
+    let lastTime = performance.now();
+    const tick = (now: number) => {
+      const dt = now - lastTime;
+      lastTime = now;
+      const pxPerMs = travel / 6000;
+      const move = pxPerMs * dt;
+      const newY = window.scrollY + move;
+      if (newY >= maxScroll) {
+        window.scrollTo(0, maxScroll);
+        return;
+      }
+      window.scrollTo(0, newY);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
   };
 
   // Toggle Voice Listening
@@ -413,6 +482,10 @@ export function UnifiedAiAgent() {
     // Navigate immediately if page path is found!
     if (result.path) {
       setLocation(result.path);
+      setTimeout(() => {
+        setIsChatOpen(false);
+        setTimeout(slowScrollPage, 1000);
+      }, 1000);
     }
 
     // Show HUD toast notification in Hinglish
@@ -495,58 +568,103 @@ export function UnifiedAiAgent() {
       )}
 
       {/* ═════════════════════════════════════════════════════════════════════ */}
-      {/* 3. PERSISTENT FLOATING SIDE DOCK (Always ready to listen or chat)   */}
+      {/* 3. PERSISTENT FLOATING CIRCULAR AI AGENT BUTTON (Left Side)         */}
       {/* ═════════════════════════════════════════════════════════════════════ */}
-      <div className="fixed bottom-6 right-20 sm:right-24 z-50 flex items-center gap-2 select-none">
+      <style>{`
+        @keyframes ai-float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-8px); }
+        }
+        @keyframes ai-glow-pulse {
+          0%, 100% { box-shadow: 0 0 12px 3px rgba(251,191,36,0.4), 0 0 30px 6px rgba(37,99,235,0.2); }
+          50% { box-shadow: 0 0 22px 8px rgba(251,191,36,0.6), 0 0 50px 12px rgba(37,99,235,0.35); }
+        }
+        @keyframes ai-ring-expand {
+          0% { transform: scale(1); opacity: 0.6; }
+          100% { transform: scale(1.8); opacity: 0; }
+        }
+        @keyframes ai-spin-slow {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        @keyframes ai-bounce-in {
+          0% { transform: scale(0) rotate(-30deg); opacity: 0; }
+          50% { transform: scale(1.15) rotate(5deg); }
+          70% { transform: scale(0.95) rotate(-2deg); }
+          100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+        .ai-agent-btn {
+          animation: ai-bounce-in 0.7s cubic-bezier(0.34,1.56,0.64,1) forwards,
+                     ai-float 3s ease-in-out 0.8s infinite,
+                     ai-glow-pulse 2.5s ease-in-out infinite;
+        }
+        .ai-agent-ring {
+          position: absolute;
+          inset: -4px;
+          border-radius: 9999px;
+          border: 2px solid rgba(251,191,36,0.35);
+          animation: ai-ring-expand 2s ease-out infinite;
+        }
+        .ai-agent-ring:nth-child(2) {
+          animation-delay: 0.7s;
+        }
+        .ai-agent-ring:nth-child(3) {
+          animation-delay: 1.4s;
+        }
+        .ai-agent-spin {
+          animation: ai-spin-slow 12s linear infinite;
+        }
+      `}</style>
+
+      <div className="fixed bottom-6 left-6 z-50 flex items-center gap-2 select-none">
         
-        {/* Floating Voice + Chat Button in Hinglish */}
-        <button
-          onClick={() => setIsChatOpen(!isChatOpen)}
-          aria-label="Open AI Voice & Chat Controller"
-          className="relative flex items-center gap-2.5 bg-gradient-to-r from-primary via-[#1e3a8a] to-secondary text-white pl-2.5 pr-4 py-2.5 rounded-full shadow-2xl hover:shadow-primary/50 hover:scale-105 active:scale-95 transition-all duration-300 border-2 border-amber-300/50 group"
-        >
-          {/* Mini Robot Avatar in Button */}
-          <div className="w-8 h-8 rounded-full bg-primary/40 flex items-center justify-center shrink-0">
-            <RobotAvatar size="sm" isSpeaking={isSpeaking} isListening={isListening} showHands={false} />
-          </div>
+        <div className="relative">
+          {/* Expanding rings */}
+          <span className="ai-agent-ring"></span>
+          <span className="ai-agent-ring"></span>
+          <span className="ai-agent-ring"></span>
 
-          <div className="flex flex-col text-left pr-0.5">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300 flex items-center gap-1">
-              <Sparkle className="w-2.5 h-2.5 text-amber-300 animate-spin" />
-              BVPS AI Controller
-            </span>
-            <span className="text-xs font-bold leading-none text-white">
-              {isListening ? 'Sun Raha Hoon 🎤' : isSpeaking ? 'Bol Raha Hoon 🔊' : 'Bolein Ya Chat Karein 🙏'}
-            </span>
-          </div>
+          {/* Spinning gradient border */}
+          <div className="absolute inset-[-3px] rounded-full ai-agent-spin" style={{
+            background: 'conic-gradient(from 0deg, #f59e0b, #2563eb, #f59e0b, #2563eb, #f59e0b)',
+            opacity: 0.6,
+          }}></div>
 
-          {/* Quick Mic Action on button */}
-          <span 
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleListening();
+          {/* Main circular button */}
+          <button
+            onClick={() => {
+              voiceEnabledRef.current = true;
+              if (!isChatOpen) {
+                setIsChatOpen(true);
+                setTimeout(() => {
+                  speakVoice("Namaste! Main BVPS Kalayat ka AI Assistant hoon. Aap mujhse fees, admission, streams, timings ke baare mein kuch bhi pooch sakte hain!");
+                }, 400);
+              } else {
+                setIsChatOpen(false);
+              }
             }}
-            className={`p-1.5 rounded-full transition-colors ${
-              isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-white/20 hover:bg-amber-400 hover:text-slate-900 text-white'
-            }`}
-            title={isListening ? "Stop listening" : "Tap to Speak (Mic On Karein)"}
+            aria-label="Open AI Voice & Chat Controller"
+            className="ai-agent-btn relative w-16 h-16 rounded-full bg-gradient-to-br from-primary via-[#1e3a8a] to-secondary text-white flex items-center justify-center shadow-2xl hover:shadow-primary/50 hover:scale-110 active:scale-95 transition-transform duration-200 border-2 border-amber-300/60 z-10 overflow-hidden"
           >
-            {isListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 font-bold" />}
-          </span>
+            {/* Inner glow overlay */}
+            <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-amber-400/10 via-transparent to-blue-400/10"></div>
 
-          {/* Online badge */}
-          <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border-2 border-white"></span>
-          </span>
-        </button>
+            <RobotAvatar size="md" isSpeaking={isSpeaking} isListening={isListening} showHands={false} />
+
+            {/* Online badge */}
+            <span className="absolute -top-1 -right-1 flex h-4 w-4 z-20">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500 border-2 border-white"></span>
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════════ */}
       {/* 4. INTEGRATED VOICE & CHATBOARD DIALOG MODAL (Hinglish)             */}
       {/* ═════════════════════════════════════════════════════════════════════ */}
       {isChatOpen && (
-        <div className="fixed bottom-24 right-3 sm:right-6 w-[95vw] sm:w-[440px] max-h-[85vh] h-[650px] z-50 bg-white rounded-3xl shadow-2xl border-2 border-primary/20 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-250">
+        <div className="fixed bottom-28 left-3 sm:left-6 w-[95vw] sm:w-[440px] max-h-[85vh] h-[650px] z-50 bg-white rounded-3xl shadow-2xl border-2 border-primary/20 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-250">
           
           {/* Header */}
           <div className="bg-gradient-to-r from-primary via-[#1e3a8a] to-primary p-3.5 text-white flex items-center justify-between shadow-sm relative shrink-0">
@@ -658,7 +776,10 @@ export function UnifiedAiAgent() {
                           onClick={() => {
                             if (msg.actionLink?.path) {
                               setLocation(msg.actionLink.path);
-                              setIsChatOpen(false);
+                              setTimeout(() => {
+                                setIsChatOpen(false);
+                                setTimeout(slowScrollPage, 1000);
+                              }, 1000);
                             }
                           }}
                           className="inline-flex items-center gap-1.5 text-xs font-bold px-3.5 py-1.5 rounded-xl bg-primary text-white hover:bg-primary/90 transition-colors shadow-sm"
